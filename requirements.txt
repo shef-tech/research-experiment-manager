@@ -1,3 +1,5 @@
 PyQt6
 SQLAlchemy
 pytest
+psycopg[binary]
+python-dotenv

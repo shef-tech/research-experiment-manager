@@ -1,7 +1,12 @@
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import SessionLocal
+from app.logger import get_logger
 from app.models import Experiment
+
+
+logger = get_logger(__name__)
 
 
 class ExperimentRepository:
@@ -17,27 +22,40 @@ class ExperimentRepository:
         notes
     ):
 
-        experiment = Experiment(
-            experiment_name=experiment_name.strip(),
-            researcher=researcher.strip(),
-            category=category.strip(),
-            measurement_value=measurement_value,
-            unit=unit.strip(),
-            status=status.strip(),
-            notes=notes.strip()
-        )
+        try:
+            experiment = Experiment(
+                experiment_name=experiment_name.strip(),
+                researcher=researcher.strip(),
+                category=category.strip(),
+                measurement_value=measurement_value,
+                unit=unit.strip(),
+                status=status.strip(),
+                notes=notes.strip()
+            )
 
-        experiment.validate()
+            experiment.validate()
 
-        with SessionLocal() as session:
+            with SessionLocal() as session:
+                session.add(experiment)
+                session.commit()
+                session.refresh(experiment)
 
-            session.add(experiment)
+            logger.info(
+                "Created experiment id=%s name=%s",
+                experiment.id,
+                experiment.experiment_name
+            )
 
-            session.commit()
+            return experiment
 
-            session.refresh(experiment)
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while creating experiment"
+            )
 
-        return experiment
+            raise RuntimeError(
+                "Could not save the experiment."
+            )
 
 
     def get_all_experiments(
@@ -46,45 +64,62 @@ class ExperimentRepository:
         status_filter="All"
     ):
 
-        search_text = search_text.strip()
-        status_filter = status_filter.strip()
+        try:
+            search_text = search_text.strip()
+            status_filter = status_filter.strip()
 
-        with SessionLocal() as session:
+            with SessionLocal() as session:
 
-            statement = select(
-                Experiment
-            )
+                statement = select(
+                    Experiment
+                )
 
-            # Search
-            if search_text:
+                if search_text:
 
-                pattern = f"%{search_text}%"
+                    pattern = f"%{search_text}%"
 
-                statement = statement.where(
-                    or_(
-                        Experiment.experiment_name.ilike(pattern),
-                        Experiment.researcher.ilike(pattern),
-                        Experiment.category.ilike(pattern),
-                        Experiment.notes.ilike(pattern)
+                    statement = statement.where(
+                        or_(
+                            Experiment.experiment_name.ilike(
+                                pattern
+                            ),
+                            Experiment.researcher.ilike(
+                                pattern
+                            ),
+                            Experiment.category.ilike(
+                                pattern
+                            ),
+                            Experiment.notes.ilike(
+                                pattern
+                            )
+                        )
                     )
+
+                if status_filter != "All":
+
+                    statement = statement.where(
+                        Experiment.status
+                        == status_filter
+                    )
+
+                statement = statement.order_by(
+                    Experiment.id.asc()
                 )
 
-            # Status filter
-            if status_filter != "All":
+                experiments = session.scalars(
+                    statement
+                ).all()
 
-                statement = statement.where(
-                    Experiment.status == status_filter
-                )
+                return list(experiments)
 
-            statement = statement.order_by(
-                Experiment.id.asc()
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while loading experiments"
             )
 
-            experiments = session.scalars(
-                statement
-            ).all()
-
-            return list(experiments)
+            raise RuntimeError(
+                "Could not load experiments."
+            )
 
 
     def get_experiment(
@@ -92,14 +127,23 @@ class ExperimentRepository:
         experiment_id
     ):
 
-        with SessionLocal() as session:
+        try:
+            with SessionLocal() as session:
 
-            experiment = session.get(
-                Experiment,
+                return session.get(
+                    Experiment,
+                    experiment_id
+                )
+
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while loading experiment id=%s",
                 experiment_id
             )
 
-            return experiment
+            raise RuntimeError(
+                "Could not load the experiment."
+            )
 
 
     def update_experiment(
@@ -114,56 +158,71 @@ class ExperimentRepository:
         notes
     ):
 
-        with SessionLocal() as session:
+        try:
+            with SessionLocal() as session:
 
-            experiment = session.get(
-                Experiment,
+                experiment = session.get(
+                    Experiment,
+                    experiment_id
+                )
+
+                if experiment is None:
+                    raise ValueError(
+                        "Experiment not found."
+                    )
+
+                experiment.experiment_name = (
+                    experiment_name.strip()
+                )
+
+                experiment.researcher = (
+                    researcher.strip()
+                )
+
+                experiment.category = (
+                    category.strip()
+                )
+
+                experiment.measurement_value = (
+                    measurement_value
+                )
+
+                experiment.unit = (
+                    unit.strip()
+                )
+
+                experiment.status = (
+                    status.strip()
+                )
+
+                experiment.notes = (
+                    notes.strip()
+                )
+
+                experiment.validate()
+
+                session.commit()
+
+                session.refresh(
+                    experiment
+                )
+
+                logger.info(
+                    "Updated experiment id=%s",
+                    experiment.id
+                )
+
+                return experiment
+
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while updating experiment id=%s",
                 experiment_id
             )
 
-            if experiment is None:
-
-                raise ValueError(
-                    "Experiment not found."
-                )
-
-            experiment.experiment_name = (
-                experiment_name.strip()
+            raise RuntimeError(
+                "Could not update the experiment."
             )
-
-            experiment.researcher = (
-                researcher.strip()
-            )
-
-            experiment.category = (
-                category.strip()
-            )
-
-            experiment.measurement_value = (
-                measurement_value
-            )
-
-            experiment.unit = (
-                unit.strip()
-            )
-
-            experiment.status = (
-                status.strip()
-            )
-
-            experiment.notes = (
-                notes.strip()
-            )
-
-            experiment.validate()
-
-            session.commit()
-
-            session.refresh(
-                experiment
-            )
-
-            return experiment
 
 
     def delete_experiment(
@@ -171,21 +230,36 @@ class ExperimentRepository:
         experiment_id
     ):
 
-        with SessionLocal() as session:
+        try:
+            with SessionLocal() as session:
 
-            experiment = session.get(
-                Experiment,
+                experiment = session.get(
+                    Experiment,
+                    experiment_id
+                )
+
+                if experiment is None:
+                    raise ValueError(
+                        "Experiment not found."
+                    )
+
+                session.delete(
+                    experiment
+                )
+
+                session.commit()
+
+                logger.info(
+                    "Deleted experiment id=%s",
+                    experiment_id
+                )
+
+        except SQLAlchemyError:
+            logger.exception(
+                "Database error while deleting experiment id=%s",
                 experiment_id
             )
 
-            if experiment is None:
-
-                raise ValueError(
-                    "Experiment not found."
-                )
-
-            session.delete(
-                experiment
+            raise RuntimeError(
+                "Could not delete the experiment."
             )
-
-            session.commit()
